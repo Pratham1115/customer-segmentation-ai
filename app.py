@@ -4,8 +4,6 @@ import plotly.express as px
 import os
 
 # --- IMPORTING YOUR MODULES ---
-# These imports match the folder structure defined in your PRD.
-# Ensure your functions in these files are named accordingly.
 try:
     from ml.preprocess import clean_data
     from ml.scaling import scale_features
@@ -107,16 +105,99 @@ if menu == "Dashboard":
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-            # FEATURE 9: AI Business Insights
+            # FEATURE 9: AI Business Insights & PDF Export
             st.subheader("7. AI Business Insights")
+            
+            # Use session state to persist insights across clicks/downloads
+            if "ai_insights" not in st.session_state:
+                st.session_state.ai_insights = None
+
             if st.button("Generate AI Insights"):
                 with st.spinner("Analyzing cluster data with Gemini..."):
-                    from ai.gemini_insights import generate_insights
-                    insights = generate_insights(cleaned_data)
-                    st.markdown(insights)
+                    try:
+                        from ai.gemini_insights import generate_insights
+                        st.session_state.ai_insights = generate_insights(cleaned_data)
+                    except ImportError:
+                        st.error("⚠️ Could not find ai/gemini_insights.py. Please create it.")
+            
+            # If insights exist, display them and provide a download button
+            if st.session_state.ai_insights:
+                st.markdown(st.session_state.ai_insights)
+                
+                try:
+                    from visuals.report_exporter import create_pdf_report
+                    # fpdf2 outputs a bytearray natively which Streamlit can download
+                    pdf_data = create_pdf_report(st.session_state.ai_insights)
                     
-            # Save processed data to session state so the chatbot can access it
-            st.session_state.processed_data = cleaned_data
+                    st.download_button(
+                        label="📥 Download PDF Executive Summary",
+                        data=pdf_data,
+                        file_name="customer_segmentation_report.pdf",
+                        mime="application/pdf"
+                    )
+                except ImportError:
+                    st.error("⚠️ Could not find visuals/report_exporter.py. Please create it to enable PDF downloads.")
+                except Exception as e:
+                    st.error(f"Could not generate PDF: {e}")
+
+            # FEATURE 11: Churn Prediction & Risk Analysis
+            st.write("---")
+            st.subheader("8. Churn Risk & Retention Analysis")
+            
+            if st.button("Run Churn Risk Analysis"):
+                with st.spinner("Analyzing risk parameters..."):
+                    try:
+                        from ml.churn_prediction import analyze_churn
+                        # Execute our churn pipeline
+                        processed_df, status_msg = analyze_churn(cleaned_data, selected_features)
+                        st.info(status_msg)
+                        
+                        # Store back in session state so chatbot can read the risk status
+                        st.session_state.processed_data = processed_df
+                        
+                        # Layout graphs
+                        col3, col4 = st.columns(2)
+                        
+                        with col3:
+                            # Pie chart showing breakdown of high/medium/low risk customers
+                            risk_counts = processed_df['Churn_Risk_Level'].value_counts().reset_index()
+                            risk_counts.columns = ['Risk Level', 'Count']
+                            fig_risk = px.pie(
+                                risk_counts, 
+                                names='Risk Level', 
+                                values='Count', 
+                                title="Overall Customer Churn Risk Breakdown",
+                                color='Risk Level',
+                                color_discrete_map={'High Risk': '#EF553B', 'Medium Risk': '#FECB52', 'Low Risk': '#636EFA'}
+                            )
+                            st.plotly_chart(fig_risk, use_container_width=True)
+                            
+                        with col4:
+                            # Cross-tabulation: Which clusters have the highest risk levels?
+                            cluster_risk = processed_df.groupby(['Cluster', 'Churn_Risk_Level']).size().reset_index(name='Count')
+                            fig_bar = px.bar(
+                                cluster_risk, 
+                                x='Cluster', 
+                                y='Count', 
+                                color='Churn_Risk_Level',
+                                title="Churn Risk Distribution Across Clusters",
+                                barmode='stack',
+                                color_discrete_map={'High Risk': '#EF553B', 'Medium Risk': '#FECB52', 'Low Risk': '#636EFA'}
+                            )
+                            st.plotly_chart(fig_bar, use_container_width=True)
+                            
+                        # Preview high risk accounts
+                        high_risk_df = processed_df[processed_df['Churn_Risk_Level'] == 'High Risk']
+                        if not high_risk_df.empty:
+                            st.warning(f"🚨 Identified {high_risk_df.shape[0]} customers at critical risk of churning.")
+                            st.dataframe(high_risk_df.drop(columns=['PCA1', 'PCA2'], errors='ignore').head())
+                            
+                    except ImportError:
+                        st.error("⚠️ Could not find ml/churn_prediction.py. Please create it to enable churn analytics.")
+
+            # Save processed data to session state for the chatbot (fallback if Churn hasn't run yet)
+            if "processed_data" not in st.session_state or st.session_state.processed_data is None:
+                st.session_state.processed_data = cleaned_data
 
         else:
             st.warning("Please select at least two features to perform clustering.")
